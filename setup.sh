@@ -1,53 +1,72 @@
 #!/usr/bin/env bash
 
-# Выходим при любой ошибке
+# Exit immediately if any command fails
 set -e
 
-# Проверяем, запущен ли скрипт от root
+# Check if running as root
 if [ "$EUID" -ne 0 ]; then
-  echo "[-] Ошибка: Этот скрипт должен быть запущен от имени root."
+  echo "[-] Error: This script must be run as root."
   exit 1
 fi
 
-DISK="/dev/nvme0n1"
-PART1="${DISK}p1"
-PART2="${DISK}p2"
+echo "[*] Available disks on your system:"
+lsblk -d -o NAME,SIZE,MODEL,TYPE | grep -E 'disk|NAME'
 
-# Проверяем, существует ли такой диск в системе
+echo ""
+read -p "What disk do you want to install on? examples: nvme0n1 sda vda [ ]: " USER_DISK
+
+# Validate user input
+if [ -z "$USER_DISK" ]; then
+  echo "[-] Disk not found or it is a flash drive"
+  exit 1
+fi
+
+DISK="/dev/$USER_DISK"
+
+# Check if the block device exists
 if [ ! -b "$DISK" ]; then
-  echo "[-] Ошибка: Диск $DISK не найден в системе!"
+  echo "[-] Disk not found or it is a flash drive"
   exit 1
 fi
 
-echo "[+] Используем диск: $DISK"
+# Determine partition suffixes (e.g., nvme0n1p1 vs sda1)
+if [[ "$DISK" =~ nvme[0-9]+n[0-9]+ ]]; then
+  PART1="${DISK}p1"
+  PART2="${DISK}p2"
+else
+  PART1="${DISK}1"
+  PART2="${DISK}2"
+fi
 
-read -p "[?] ВНИМАНИЕ! Все данные на диске $DISK будут уничтожены. Продолжить? (y/N): " -n 1 -r
+echo "[+] Selected disk: $DISK"
+
+read -p "[?] WARNING! All data on $DISK will be destroyed. Do you want to continue? (y/N): " -n 1 -r
 echo
 if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-  echo "[-] Отменено пользователем."
+  echo "[-] Cancelled by user."
   exit 1
 fi
 
-echo "[*] Создание таблицы разделов GPT..."
+echo "[*] Creating GPT partition table..."
 parted "$DISK" --script mklabel gpt
 
-echo "[*] Создание EFI раздела (512MiB)..."
+echo "[*] Creating EFI partition (512MiB)..."
 parted "$DISK" --script mkpart ESP fat32 1MiB 512MiB
 parted "$DISK" --script set 1 boot on
 
-echo "[*] Создание корневого раздела (ext4 на оставшееся место)..."
+echo "[*] Creating root partition (ext4 using remaining space)..."
 parted "$DISK" --script mkpart primary ext4 512MiB 100%
 
-echo "[*] Форматирование EFI раздела в FAT32..."
+echo "[*] Formatting EFI partition as FAT32..."
 mkfs.fat -F32 "$PART1"
 
-echo "[*] Форматирование корневого раздела в EXT4..."
+echo "[*] Formatting root partition as EXT4..."
 mkfs.ext4 -F "$PART2"
 
-echo "[*] Монтирование файловых систем в /mnt..."
+echo "[*] Mounting filesystems to /mnt..."
 mount "$PART2" /mnt
 mkdir -p /mnt/boot
 mount "$PART1" /mnt/boot
 
-echo "[+] Готово! Диск $DISK размечен и примонтирован в /mnt."
+echo "[+] Done! $DISK has been successfully partitioned and mounted to /mnt."
 lsblk "$DISK"
